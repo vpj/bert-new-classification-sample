@@ -192,7 +192,7 @@ class NewsClassifier(nn.Module):
 
         self.loss_fn = nn.CrossEntropyLoss().to(self.device)
 
-    def start_training(self, model):
+    def start_training(self, model, args):
         """
         Initialzes the Traning step with the model initialized
 
@@ -207,7 +207,16 @@ class NewsClassifier(nn.Module):
                 val_acc = self.eval_model(model, self.val_data_loader)
 
             if val_acc > best_accuracy:
-                torch.save(model.state_dict(), "best_model_state.bin")
+                if args.save_model:
+                    with monit.section('Save model'):
+                        if os.path.exists(args.model_save_path):
+                            shutil.rmtree(args.model_save_path)
+                        mlflow.pytorch.save_model(
+                            model,
+                            path=args.model_save_path,
+                            requirements_file="requirements.txt",
+                            extra_files=["class_mapping.json", "bert_base_uncased_vocab.txt"],
+                        )
                 best_accuracy = val_acc
 
             tracker.new_line()
@@ -221,7 +230,7 @@ class NewsClassifier(nn.Module):
         :result: output - Accuracy of the model after training
         """
 
-        model = model.train()
+        model.train()
         correct_predictions = 0
         total = 0
 
@@ -260,7 +269,7 @@ class NewsClassifier(nn.Module):
 
         :result: output - Accuracy of the model after testing
         """
-        model = model.eval()
+        model.eval()
 
         correct_predictions = 0
         total = 0
@@ -323,8 +332,7 @@ class NewsClassifier(nn.Module):
         return review_texts, predictions, prediction_probs, real_values
 
 
-if __name__ == "__main__":
-
+def main():
     parser = argparse.ArgumentParser(description="PyTorch BERT Example")
 
     parser.add_argument(
@@ -372,7 +380,7 @@ if __name__ == "__main__":
         model = model.to(model.device)
         model.prepare_data()
         model.set_optimizer()
-        model.start_training(model)
+        model.start_training(model, args)
 
         print("TRAINING COMPLETED!!!")
 
@@ -384,15 +392,8 @@ if __name__ == "__main__":
             model, model.test_data_loader
         )
 
-        if args.save_model:
-            with monit.section('Save model'):
-                if os.path.exists(args.model_save_path):
-                    shutil.rmtree(args.model_save_path)
-                mlflow.pytorch.save_model(
-                    model,
-                    path=args.model_save_path,
-                    requirements_file="requirements.txt",
-                    extra_files=["class_mapping.json", "bert_base_uncased_vocab.txt"],
-                )
-
         mlflow.end_run()
+
+
+if __name__ == '__main__':
+    main()
