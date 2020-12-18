@@ -91,7 +91,7 @@ class NewsClassifier(nn.Module):
         self.VOCAB_FILE = "bert_base_uncased_vocab.txt"
 
         self.drop = nn.Dropout(p=0.2)
-        self.bert = BertModel.from_pretrained(self.PRE_TRAINED_MODEL_NAME)
+        self.bert = BertModel.from_pretrained(self.PRE_TRAINED_MODEL_NAME, cache_dir='.cache')
         for param in self.bert.parameters():
             param.requires_grad = False
         self.fc1 = nn.Linear(self.bert.config.hidden_size, 512)
@@ -104,8 +104,8 @@ class NewsClassifier(nn.Module):
 
         :return: output - label for the input text
         """
-        _, pooled_output = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        output = F.relu(self.fc1(pooled_output))
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        output = F.relu(self.fc1(outputs.pooler_output))
         output = self.drop(output)
         output = self.out(output)
         return output
