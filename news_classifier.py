@@ -61,11 +61,33 @@ class AGNewsDataset(Dataset):
         }
 
 
-class NewsClassifier(nn.Module):
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.drop = nn.Dropout(p=0.2)
+        self.bert = BertModel.from_pretrained("bert-base-uncased", cache_dir='.cache')
+        for param in self.bert.parameters():
+            param.requires_grad = False
+        self.fc1 = nn.Linear(self.bert.config.hidden_size, 512)
+        self.out = nn.Linear(512, len(class_names))
+
+    def forward(self, input_ids, attention_mask):
+        """
+        :param input_ids: Input sentences from the batch
+        :param attention_mask: Attention mask returned by the encoder
+
+        :return: output - label for the input text
+        """
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        output = F.relu(self.fc1(outputs.pooler_output))
+        output = self.drop(output)
+        output = self.out(output)
+        return output
+
+
+class NewsClassifierTrainer:
     def __init__(self, args):
-        super(NewsClassifier, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.PRE_TRAINED_MODEL_NAME = "bert-base-uncased"
         self.EPOCHS = args.max_epochs
         self.df = None
         self.tokenizer = None
@@ -82,36 +104,16 @@ class NewsClassifier(nn.Module):
         self.BATCH_SIZE = 16
         self.MAX_LEN = 160
         self.NUM_SAMPLES_COUNT = args.num_samples
-        n_classes = len(class_names)
         self.VOCAB_FILE_URL = args.vocab_file
         self.VOCAB_FILE = "bert_base_uncased_vocab.txt"
-
-        self.drop = nn.Dropout(p=0.2)
-        self.bert = BertModel.from_pretrained(self.PRE_TRAINED_MODEL_NAME, cache_dir='.cache')
-        for param in self.bert.parameters():
-            param.requires_grad = False
-        self.fc1 = nn.Linear(self.bert.config.hidden_size, 512)
-        self.out = nn.Linear(512, n_classes)
-
-    def forward(self, input_ids, attention_mask):
-        """
-        :param input_ids: Input sentences from the batch
-        :param attention_mask: Attention mask returned by the encoder
-
-        :return: output - label for the input text
-        """
-        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        output = F.relu(self.fc1(outputs.pooler_output))
-        output = self.drop(output)
-        output = self.out(output)
-        return output
 
     @staticmethod
     def process_label(rating):
         rating = int(rating)
         return rating - 1
 
-    def create_data_loader(self, df, tokenizer, max_len, batch_size):
+    @staticmethod
+    def create_data_loader(df, tokenizer, max_len, batch_size):
         """
         :param df: DataFrame input
         :param tokenizer: Bert tokenizer
@@ -136,6 +138,7 @@ class NewsClassifier(nn.Module):
         dataset_tar = download_from_url(URLS["AG_NEWS"], root=".data")
         extracted_files = extract_archive(dataset_tar)
 
+        train_csv_path = None
         for fname in extracted_files:
             if fname.endswith("train.csv"):
                 train_csv_path = fname
@@ -179,7 +182,7 @@ class NewsClassifier(nn.Module):
             self.df_test, self.tokenizer, self.MAX_LEN, self.BATCH_SIZE
         )
 
-    def set_optimizer(self):
+    def set_optimizer(self, model):
         """
         Sets the optimizer and scheduler functions
         """
@@ -376,20 +379,21 @@ def main():
     with experiment.start():
         mlflow.start_run()
 
-        model = NewsClassifier(args)
-        model = model.to(model.device)
-        model.prepare_data()
-        model.set_optimizer()
-        model.start_training(model, args)
+        trainer = NewsClassifierTrainer(args)
+        model = Model()
+        model = model.to(trainer.device)
+        trainer.prepare_data()
+        trainer.set_optimizer(model)
+        trainer.start_training(model, args)
 
         print("TRAINING COMPLETED!!!")
 
         with tracker.namespace('test'):
-            test_acc = model.eval_model(model, model.test_data_loader)
+            test_acc = trainer.eval_model(model, trainer.test_data_loader)
             print(test_acc)
 
-        y_review_texts, y_pred, y_pred_probs, y_test = model.get_predictions(
-            model, model.test_data_loader
+        y_review_texts, y_pred, y_pred_probs, y_test = trainer.get_predictions(
+            model, trainer.test_data_loader
         )
 
         mlflow.end_run()
