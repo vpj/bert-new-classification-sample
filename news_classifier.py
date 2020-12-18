@@ -363,6 +363,7 @@ if __name__ == "__main__":
 
     experiment.create(name='bert_news')
     args = parser.parse_args()
+    experiment.configs(args.__dict__)
 
     with experiment.start():
         mlflow.start_run()
