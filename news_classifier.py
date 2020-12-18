@@ -1,7 +1,6 @@
 import argparse
 import os
 import shutil
-from collections import defaultdict
 
 import mlflow.pytorch
 import numpy as np
@@ -9,12 +8,12 @@ import pandas as pd
 import requests
 import torch
 import torch.nn.functional as F
+from labml import experiment, tracker, monit
 from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchtext.datasets.text_classification import URLS
 from torchtext.utils import download_from_url, extract_archive
-from tqdm import tqdm
 from transformers import (
     BertModel,
     BertTokenizer,
@@ -199,28 +198,19 @@ class NewsClassifier(nn.Module):
 
         :param model: Instance of the NewsClassifier class
         """
-        history = defaultdict(list)
         best_accuracy = 0
 
-        for epoch in range(self.EPOCHS):
+        for epoch in monit.loop(self.EPOCHS):
+            self.train_epoch(model)
 
-            print(f"Epoch {epoch + 1}/{self.EPOCHS}")
-
-            train_acc, train_loss = self.train_epoch(model)
-
-            print(f"Train loss {train_loss} accuracy {train_acc}")
-
-            val_acc, val_loss = self.eval_model(model, self.val_data_loader)
-            print(f"Val   loss {val_loss} accuracy {val_acc}")
-
-            history["train_acc"].append(train_acc)
-            history["train_loss"].append(train_loss)
-            history["val_acc"].append(val_acc)
-            history["val_loss"].append(val_loss)
+            with tracker.namespace('valid'):
+                val_acc = self.eval_model(model, self.val_data_loader)
 
             if val_acc > best_accuracy:
                 torch.save(model.state_dict(), "best_model_state.bin")
                 best_accuracy = val_acc
+
+            tracker.new_line()
 
     def train_epoch(self, model):
         """
@@ -232,10 +222,10 @@ class NewsClassifier(nn.Module):
         """
 
         model = model.train()
-        losses = []
         correct_predictions = 0
+        total = 0
 
-        for data in tqdm(self.train_data_loader):
+        for i, data in monit.enum('Train', self.train_data_loader):
             input_ids = data["input_ids"].to(self.device)
             attention_mask = data["attention_mask"].to(self.device)
             targets = data["targets"].to(self.device)
@@ -245,8 +235,10 @@ class NewsClassifier(nn.Module):
             _, preds = torch.max(outputs, dim=1)
             loss = self.loss_fn(outputs, targets)
 
-            correct_predictions += torch.sum(preds == targets)
-            losses.append(loss.item())
+            correct_predictions += torch.sum(preds == targets).item()
+            total += len(preds)
+            tracker.add('loss.train', loss)
+            tracker.add_global_step(len(preds))
 
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -254,10 +246,10 @@ class NewsClassifier(nn.Module):
             self.scheduler.step()
             self.optimizer.zero_grad()
 
-        return (
-            correct_predictions.double() / len(self.train_data_loader),
-            np.mean(losses),
-        )
+            if (i + 1) % 10 == 0:
+                tracker.save()
+
+        tracker.save('accuracy.train', correct_predictions / total)
 
     def eval_model(self, model, data_loader):
         """
@@ -270,11 +262,11 @@ class NewsClassifier(nn.Module):
         """
         model = model.eval()
 
-        losses = []
         correct_predictions = 0
+        total = 0
 
         with torch.no_grad():
-            for d in data_loader:
+            for d in monit.iterate('Valid', data_loader):
                 input_ids = d["input_ids"].to(self.device)
                 attention_mask = d["attention_mask"].to(self.device)
                 targets = d["targets"].to(self.device)
@@ -283,10 +275,12 @@ class NewsClassifier(nn.Module):
                 _, preds = torch.max(outputs, dim=1)
 
                 loss = self.loss_fn(outputs, targets)
-                correct_predictions += torch.sum(preds == targets)
-                losses.append(loss.item())
+                correct_predictions += torch.sum(preds == targets).item()
+                total += len(preds)
+                tracker.add('loss.', loss)
 
-        return correct_predictions.double() / len(data_loader), np.mean(losses)
+        tracker.save('accuracy.', correct_predictions / total)
+        return correct_predictions / total
 
     def get_predictions(self, model, data_loader):
 
@@ -367,35 +361,37 @@ if __name__ == "__main__":
         "--model_save_path", type=str, default="models", help="Path to save mlflow model"
     )
 
+    experiment.create(name='bert_news')
     args = parser.parse_args()
-    mlflow.start_run()
 
-    model = NewsClassifier(args)
-    model = model.to(model.device)
-    model.prepare_data()
-    model.set_optimizer()
-    model.start_training(model)
+    with experiment.start():
+        mlflow.start_run()
 
-    print("TRAINING COMPLETED!!!")
+        model = NewsClassifier(args)
+        model = model.to(model.device)
+        model.prepare_data()
+        model.set_optimizer()
+        model.start_training(model)
 
-    test_acc, _ = model.eval_model(model, model.test_data_loader)
+        print("TRAINING COMPLETED!!!")
 
-    print(test_acc.item())
+        with tracker.namespace('test'):
+            test_acc = model.eval_model(model, model.test_data_loader)
+            print(test_acc)
 
-    y_review_texts, y_pred, y_pred_probs, y_test = model.get_predictions(
-        model, model.test_data_loader
-    )
-
-    print("\n\n\n SAVING MODEL")
-
-    if args.save_model:
-        if os.path.exists(args.model_save_path):
-            shutil.rmtree(args.model_save_path)
-        mlflow.pytorch.save_model(
-            model,
-            path=args.model_save_path,
-            requirements_file="requirements.txt",
-            extra_files=["class_mapping.json", "bert_base_uncased_vocab.txt"],
+        y_review_texts, y_pred, y_pred_probs, y_test = model.get_predictions(
+            model, model.test_data_loader
         )
 
-    mlflow.end_run()
+        if args.save_model:
+            with monit.section('Save model'):
+                if os.path.exists(args.model_save_path):
+                    shutil.rmtree(args.model_save_path)
+                mlflow.pytorch.save_model(
+                    model,
+                    path=args.model_save_path,
+                    requirements_file="requirements.txt",
+                    extra_files=["class_mapping.json", "bert_base_uncased_vocab.txt"],
+                )
+
+        mlflow.end_run()
