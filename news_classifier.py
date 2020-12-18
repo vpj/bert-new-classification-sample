@@ -1,29 +1,26 @@
-# pylint: disable=W0221
-# pylint: disable=W0613
-# pylint: disable=E1102
-# pylint: disable=W0223
+import argparse
+import os
 import shutil
 from collections import defaultdict
+
+import mlflow.pytorch
 import numpy as np
 import pandas as pd
+import requests
 import torch
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
+from torchtext.datasets.text_classification import URLS
+from torchtext.utils import download_from_url, extract_archive
+from tqdm import tqdm
 from transformers import (
     BertModel,
     BertTokenizer,
     AdamW,
     get_linear_schedule_with_warmup,
 )
-import argparse
-import os
-from tqdm import tqdm
-import requests
-from torchtext.utils import download_from_url, extract_archive
-from torchtext.datasets.text_classification import URLS
-import mlflow.pytorch
 
 class_names = ["World", "Sports", "Business", "Sci/Tech"]
 
@@ -183,7 +180,7 @@ class NewsClassifier(nn.Module):
             self.df_test, self.tokenizer, self.MAX_LEN, self.BATCH_SIZE
         )
 
-    def setOptimizer(self):
+    def set_optimizer(self):
         """
         Sets the optimizer and scheduler functions
         """
@@ -196,7 +193,7 @@ class NewsClassifier(nn.Module):
 
         self.loss_fn = nn.CrossEntropyLoss().to(self.device)
 
-    def startTraining(self, model):
+    def start_training(self, model):
         """
         Initialzes the Traning step with the model initialized
 
@@ -350,7 +347,7 @@ if __name__ == "__main__":
         default=15000,
         metavar="N",
         help="Number of samples to be used for training "
-        "and evaluation steps (default: 15000) Maximum:100000",
+             "and evaluation steps (default: 15000) Maximum:100000",
     )
 
     parser.add_argument(
@@ -376,8 +373,8 @@ if __name__ == "__main__":
     model = NewsClassifier(args)
     model = model.to(model.device)
     model.prepare_data()
-    model.setOptimizer()
-    model.startTraining(model)
+    model.set_optimizer()
+    model.start_training(model)
 
     print("TRAINING COMPLETED!!!")
 
