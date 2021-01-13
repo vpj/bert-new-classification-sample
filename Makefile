@@ -4,10 +4,13 @@ clean: ## Clean
 	rm -rf mlruns
 	rm -rf model_store
 
-model-store: ## Create empty model store
+train:
+	python news_classifier.py
+
+model_store: ## Create empty model store
 	mkdir model_store
 
-torchserve-start: model-store ## Start torch serve
+torchserve-start: model_store ## Start torch serve
 	torchserve --start --model-store model_store
 
 torchserve-stop: ## Stop torch serve
@@ -26,6 +29,7 @@ predict: ## Make a prediction
 		--target torchserve \
 		--input-path input.json \
 		--output-path output.json
+	cat output.json
 
 help: ## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
